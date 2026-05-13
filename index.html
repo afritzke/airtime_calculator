@@ -97,7 +97,7 @@
     /* ── Airtime display ── */
     .airtime-display {
       text-align: center;
-      padding: 16px 16px;
+      padding: 20px 16px;
       background: radial-gradient(ellipse at center, #1a1a2e 0%, #0f0f1a 100%);
       border-radius: 16px;
       border: 1px solid #2a2a3a;
@@ -111,7 +111,7 @@
     }
     .airtime-value {
       font-family: 'Courier New', monospace;
-      font-size: 56px;
+      font-size: 64px;
       font-weight: 700;
       color: #333;
       line-height: 1;
@@ -131,36 +131,6 @@
       margin-top: 4px;
     }
     .airtime-unit.has-value { color: #00d4ff; }
-
-    /* ── Toggle button ── */
-    .btn-toggle {
-      width: 100%;
-      padding: 14px;
-      font-size: 18px;
-      font-weight: 700;
-      border: none;
-      border-radius: 12px;
-      cursor: pointer;
-      letter-spacing: 1px;
-      text-transform: uppercase;
-      transition: all 0.2s;
-      outline: none;
-    }
-    .btn-toggle.start {
-      background: linear-gradient(135deg, #00d4ff, #7b2ff7);
-      color: #fff;
-    }
-    .btn-toggle.start:focus { box-shadow: 0 0 0 3px rgba(0, 212, 255, 0.4); }
-    .btn-toggle.stop {
-      background: #ff1744;
-      color: #fff;
-    }
-    .btn-toggle.stop:focus { box-shadow: 0 0 0 3px rgba(255, 23, 68, 0.4); }
-    .btn-toggle:disabled {
-      background: #333;
-      color: #666;
-      cursor: not-allowed;
-    }
 
     /* ── Record banner ── */
     .record-section {
@@ -248,27 +218,22 @@
     <!-- Title -->
     <div class="title-bar">
       <h1>Airtime Calculator</h1>
-      <div class="subtitle">Measure your jump airtime</div>
+      <div class="subtitle">Jump and your airtime is recorded automatically</div>
     </div>
 
     <!-- Status -->
     <div class="status-bar">
       <span class="status-dot" id="statusDot"></span>
-      <span class="status-text" id="statusText">Ready</span>
+      <span class="status-text" id="statusText">Starting...</span>
       <span class="g-readout" id="gReadout">—</span>
     </div>
 
     <!-- Airtime Display -->
     <div class="airtime-display">
-      <div class="airtime-label">Airtime</div>
+      <div class="airtime-label">Last Airtime</div>
       <div class="airtime-value" id="airtimeValue">—</div>
       <div class="airtime-unit" id="airtimeUnit">ms</div>
     </div>
-
-    <!-- Toggle Button -->
-    <button class="btn-toggle start" id="toggleBtn" autofocus>
-      Start Measuring
-    </button>
 
     <!-- All-Time Record -->
     <div class="record-section">
@@ -286,7 +251,7 @@
     </div>
 
     <!-- Sensor Info -->
-    <div class="sdk-info" id="sdkInfo">Sensor: waiting...</div>
+    <div class="sdk-info" id="sdkInfo">Sensor: starting...</div>
   </div>
 
 <script>
@@ -301,7 +266,7 @@ var AIRBORNE_THRESHOLD = 0.4;     // G below this = airborne (freefall)
 var LANDING_THRESHOLD = 0.7;      // G above this = potential landing
 var LANDING_SUSTAIN_MS = 30;      // ms the signal must stay above threshold to confirm landing
 
-// Safety: auto-stop if airborne for too long (probably sensor error)
+// Safety: auto-reset if airborne for too long (probably sensor error)
 var MAX_AIRBORNE_MS = 3000;
 
 // Calibration
@@ -311,9 +276,8 @@ var HISTORY_MAX = 5;
 // ─────────────────────────────────────────────────────────────
 // State
 // ─────────────────────────────────────────────────────────────
-// State machine: IDLE | CALIBRATING | WAITING | PUSHOFF_DETECTED | AIRBORNE
-var state = 'IDLE';
-var measuring = false;
+// State machine: CALIBRATING | WAITING | PUSHOFF_DETECTED | AIRBORNE
+var state = 'CALIBRATING';
 
 var calibrationSamples = [];
 var baselineG = 1.0;
@@ -322,7 +286,7 @@ var pushoffDetectedTime = 0;
 var airborneStartTime = 0;
 var landingSustainStart = 0;
 
-var jumpHistory = [];   // [{ms, date}] most recent first
+var jumpHistory = [];     // [{ms, date}] most recent first
 var allTimeRecord = null; // {ms, date}
 
 // ─────────────────────────────────────────────────────────────
@@ -333,7 +297,6 @@ var statusTextEl = document.getElementById('statusText');
 var gReadout = document.getElementById('gReadout');
 var airtimeValueEl = document.getElementById('airtimeValue');
 var airtimeUnitEl = document.getElementById('airtimeUnit');
-var toggleBtn = document.getElementById('toggleBtn');
 var recordValueEl = document.getElementById('recordValue');
 var recordDateEl = document.getElementById('recordDate');
 var historyListEl = document.getElementById('historyList');
@@ -342,8 +305,6 @@ var sdkInfoEl = document.getElementById('sdkInfo');
 // ─────────────────────────────────────────────────────────────
 // W3C DeviceMotionEvent Sensor Handler
 // ─────────────────────────────────────────────────────────────
-var sensorActive = false;
-
 function handleMotion(event) {
   var a = event.accelerationIncludingGravity;
   if (!a || a.x === null) return;
@@ -353,12 +314,10 @@ function handleMotion(event) {
   var gForce = mag / G_FORCE_GRAVITY;
   var timeMs = performance.now();
 
-  // Live G readout (always active when sensor is on)
+  // Live G readout
   gReadout.textContent = gForce.toFixed(2) + 'G';
 
-  if (!measuring) return;
-
-  // ── State machine ──
+  // ── State machine — always running ──
   switch (state) {
 
     // ── CALIBRATING: collect baseline samples ──
@@ -417,16 +376,13 @@ function handleMotion(event) {
       }
 
       if (gForce > LANDING_THRESHOLD) {
-        // Potential landing — need sustained signal to confirm
         if (landingSustainStart === 0) {
           landingSustainStart = timeMs;
         } else if (timeMs - landingSustainStart >= LANDING_SUSTAIN_MS) {
-          // Confirmed landing — airtime is from airborne start to first threshold crossing
           var airtimeMs = landingSustainStart - airborneStartTime;
           onJumpComplete(airtimeMs, false);
         }
       } else {
-        // Still in freefall — reset sustain timer
         landingSustainStart = 0;
       }
       break;
@@ -440,25 +396,24 @@ function onJumpComplete(airtimeMs, wasTimeout) {
   airtimeMs = Math.round(airtimeMs);
 
   // Update display
-  displayAirtime(airtimeMs);
+  airtimeValueEl.textContent = airtimeMs;
+  airtimeValueEl.classList.remove('airborne');
+  airtimeValueEl.classList.add('has-value');
+  airtimeUnitEl.classList.add('has-value');
 
   if (wasTimeout) {
-    setStatus('error', 'Timeout — possible sensor issue');
+    setStatus('error', 'Timeout — sensor issue?');
   } else {
-    setStatus('landed', 'Landed! ' + airtimeMs + 'ms airtime');
+    setStatus('landed', 'Landed! ' + airtimeMs + 'ms');
   }
 
   // Add to history
   var now = new Date();
-  var entry = {
+  jumpHistory.unshift({
     ms: airtimeMs,
     date: now.toLocaleTimeString()
-  };
-
-  jumpHistory.unshift(entry);
-  if (jumpHistory.length > HISTORY_MAX) {
-    jumpHistory.pop();
-  }
+  });
+  if (jumpHistory.length > HISTORY_MAX) jumpHistory.pop();
 
   // Check all-time record
   if (!allTimeRecord || airtimeMs > allTimeRecord.ms) {
@@ -472,19 +427,13 @@ function onJumpComplete(airtimeMs, wasTimeout) {
   updateHistory();
   saveData();
 
-  // Continue measuring — go back to WAITING for next jump
-  // (instead of stopping sensors entirely)
-  if (!wasTimeout) {
-    state = 'WAITING';
-    // Brief delay then show ready status
-    setTimeout(function() {
-      if (measuring && state === 'WAITING') {
-        setStatus('measuring', 'Ready — jump again!');
-      }
-    }, 1500);
-  } else {
-    resetState();
-  }
+  // Go back to WAITING for next jump automatically
+  state = 'WAITING';
+  setTimeout(function() {
+    if (state === 'WAITING') {
+      setStatus('measuring', 'Ready — jump again!');
+    }
+  }, 2000);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -493,19 +442,6 @@ function onJumpComplete(airtimeMs, wasTimeout) {
 function setStatus(type, text) {
   statusDot.className = 'status-dot ' + type;
   statusTextEl.textContent = text;
-}
-
-function displayAirtime(ms) {
-  airtimeValueEl.textContent = ms;
-  airtimeValueEl.classList.remove('airborne');
-  airtimeValueEl.classList.add('has-value');
-  airtimeUnitEl.classList.add('has-value');
-}
-
-function clearAirtimeDisplay() {
-  airtimeValueEl.textContent = '—';
-  airtimeValueEl.classList.remove('has-value', 'airborne');
-  airtimeUnitEl.classList.remove('has-value');
 }
 
 function updateRecord() {
@@ -525,7 +461,6 @@ function updateHistory() {
     historyListEl.innerHTML = '<div class="history-empty">No jumps recorded yet</div>';
     return;
   }
-
   var html = '';
   for (var i = 0; i < jumpHistory.length; i++) {
     var entry = jumpHistory[i];
@@ -536,133 +471,6 @@ function updateHistory() {
       '</div>';
   }
   historyListEl.innerHTML = html;
-}
-
-// ─────────────────────────────────────────────────────────────
-// Toggle Button & D-pad Support
-// ─────────────────────────────────────────────────────────────
-function toggle() {
-  if (!measuring) {
-    startMeasuring();
-  } else {
-    stopMeasuring();
-  }
-}
-
-toggleBtn.addEventListener('click', toggle);
-
-// D-pad / EMG input: arrow keys and Enter
-// HN glasses translate EMG gestures to keyboard events
-document.addEventListener('keydown', function(e) {
-  var key = e.key || '';
-  var code = e.keyCode || 0;
-
-  // Enter, Space, or any "select" action → toggle
-  if (key === 'Enter' || code === 13 || key === ' ' || code === 32) {
-    e.preventDefault();
-    toggle();
-  }
-
-  // Arrow keys — consume them so the page doesn't scroll
-  if (key === 'ArrowUp' || key === 'ArrowDown' ||
-      key === 'ArrowLeft' || key === 'ArrowRight' ||
-      code >= 37 && code <= 40) {
-    e.preventDefault();
-  }
-});
-
-// Also listen for keyup and click anywhere on the page
-// in case the glasses browser fires different event types
-document.addEventListener('keyup', function(e) {
-  var key = e.key || '';
-  var code = e.keyCode || 0;
-  if (key === 'Enter' || code === 13) {
-    e.preventDefault();
-    toggle();
-  }
-});
-
-// Tap anywhere on the page to toggle (for touch/cursor modes)
-document.body.addEventListener('click', function(e) {
-  // Only if they didn't click the button itself (avoid double-fire)
-  if (e.target !== toggleBtn) {
-    toggle();
-  }
-});
-
-function startMeasuring() {
-  if (!sensorActive) {
-    initSensor();
-    return;
-  }
-
-  // Reset display
-  clearAirtimeDisplay();
-  gReadout.textContent = '—';
-
-  // Start calibration phase
-  calibrationSamples = [];
-  state = 'CALIBRATING';
-  measuring = true;
-
-  // Update button
-  toggleBtn.textContent = 'Stop';
-  toggleBtn.classList.remove('start');
-  toggleBtn.classList.add('stop');
-}
-
-function stopMeasuring() {
-  measuring = false;
-  setStatus('ready', 'Stopped — tap Start to measure');
-  resetState();
-}
-
-function resetState() {
-  state = 'IDLE';
-  measuring = false;
-  calibrationSamples = [];
-  pushoffDetectedTime = 0;
-  airborneStartTime = 0;
-  landingSustainStart = 0;
-  airtimeValueEl.classList.remove('airborne');
-
-  toggleBtn.textContent = 'Start Measuring';
-  toggleBtn.classList.remove('stop');
-  toggleBtn.classList.add('start');
-}
-
-// ─────────────────────────────────────────────────────────────
-// Sensor Initialization (W3C DeviceMotionEvent)
-// ─────────────────────────────────────────────────────────────
-function initSensor() {
-  if (typeof DeviceMotionEvent !== 'undefined' &&
-      typeof DeviceMotionEvent.requestPermission === 'function') {
-    // iOS / permission-gated browsers
-    DeviceMotionEvent.requestPermission().then(function(permState) {
-      if (permState === 'granted') {
-        attachSensor();
-      } else {
-        setStatus('error', 'Sensor permission denied');
-        sdkInfoEl.textContent = 'Permission denied';
-      }
-    }).catch(function() {
-      setStatus('error', 'Sensor permission error');
-      sdkInfoEl.textContent = 'Permission error';
-    });
-  } else if ('DeviceMotionEvent' in window) {
-    attachSensor();
-  } else {
-    setStatus('error', 'Accelerometer not available');
-    sdkInfoEl.textContent = 'No accelerometer';
-    toggleBtn.disabled = true;
-  }
-}
-
-function attachSensor() {
-  window.addEventListener('devicemotion', handleMotion);
-  sensorActive = true;
-  sdkInfoEl.textContent = 'Sensor: active (W3C DeviceMotion)';
-  setStatus('ready', 'Ready — tap Start and jump!');
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -680,7 +488,7 @@ function loadSavedData() {
       jumpHistory = JSON.parse(savedHistory);
       updateHistory();
     }
-  } catch(e) { /* ignore parse errors */ }
+  } catch(e) {}
 }
 
 function saveData() {
@@ -689,23 +497,41 @@ function saveData() {
       localStorage.setItem('airtime-record', JSON.stringify(allTimeRecord));
     }
     localStorage.setItem('airtime-history', JSON.stringify(jumpHistory));
-  } catch(e) { /* ignore storage errors */ }
+  } catch(e) {}
 }
 
-// Save on page unload
 window.addEventListener('beforeunload', saveData);
 
 // ─────────────────────────────────────────────────────────────
-// Init
+// Init — always-on, no user interaction needed
 // ─────────────────────────────────────────────────────────────
 loadSavedData();
 
-// Auto-init sensor if no permission gate needed
-if ('DeviceMotionEvent' in window &&
-    typeof DeviceMotionEvent.requestPermission !== 'function') {
+function attachSensor() {
+  window.addEventListener('devicemotion', handleMotion);
+  sdkInfoEl.textContent = 'Sensor: active';
+  // Start calibrating immediately
+  state = 'CALIBRATING';
+  calibrationSamples = [];
+  setStatus('calibrating', 'Calibrating...');
+}
+
+if (typeof DeviceMotionEvent !== 'undefined' &&
+    typeof DeviceMotionEvent.requestPermission === 'function') {
+  // iOS needs a user gesture — auto-request on first touch
+  sdkInfoEl.textContent = 'Tap screen to enable sensor';
+  document.addEventListener('click', function once() {
+    DeviceMotionEvent.requestPermission().then(function(s) {
+      if (s === 'granted') attachSensor();
+      else setStatus('error', 'Permission denied');
+    });
+    document.removeEventListener('click', once);
+  });
+} else if ('DeviceMotionEvent' in window) {
   attachSensor();
 } else {
-  sdkInfoEl.textContent = 'Tap START to enable sensor';
+  setStatus('error', 'No accelerometer available');
+  sdkInfoEl.textContent = 'No sensor';
 }
 </script>
 </body>
