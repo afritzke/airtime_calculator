@@ -203,13 +203,6 @@
       padding: 8px;
     }
 
-    /* ── Footer ── */
-    .sdk-info {
-      text-align: center;
-      font-size: 10px;
-      color: #333;
-      padding: 2px;
-    }
   </style>
 </head>
 <body>
@@ -242,12 +235,6 @@
       <div class="record-date" id="recordDate"></div>
     </div>
 
-    <!-- Debug Trace (visible on glasses) -->
-    <div class="record-section" id="traceSection" style="display:none;">
-      <div class="section-title">Last Jump Trace</div>
-      <div id="traceInfo" style="font-size:9px; color:#888; font-family:'Courier New',monospace; word-break:break-all; max-height:60px; overflow:hidden;"></div>
-    </div>
-
     <!-- Jump History -->
     <div class="history-section">
       <div class="section-title">Recent Jumps</div>
@@ -256,8 +243,6 @@
       </div>
     </div>
 
-    <!-- Sensor Info -->
-    <div class="sdk-info" id="sdkInfo">Sensor: starting...</div>
   </div>
 
 <script>
@@ -295,10 +280,6 @@ var landingSustainStart = 0;
 var jumpHistory = [];     // [{ms, date}] most recent first
 var allTimeRecord = null; // {ms, date}
 
-// G-force trace recording for debugging
-var gTrace = [];          // [{t, g, state}] — recorded during active jump phases
-var traceStartTime = 0;
-
 // ─────────────────────────────────────────────────────────────
 // DOM elements
 // ─────────────────────────────────────────────────────────────
@@ -310,7 +291,6 @@ var airtimeUnitEl = document.getElementById('airtimeUnit');
 var recordValueEl = document.getElementById('recordValue');
 var recordDateEl = document.getElementById('recordDate');
 var historyListEl = document.getElementById('historyList');
-var sdkInfoEl = document.getElementById('sdkInfo');
 
 // ─────────────────────────────────────────────────────────────
 // W3C DeviceMotionEvent Sensor Handler
@@ -352,28 +332,22 @@ function handleMotion(event) {
       if (gForce > PUSHOFF_THRESHOLD) {
         state = 'PUSHOFF_DETECTED';
         pushoffDetectedTime = timeMs;
-        traceStartTime = timeMs;
-        gTrace = [];
-        gTrace.push({t: 0, g: gForce, s: 'PUSH'});
         setStatus('measuring', 'Push-off detected...');
       }
       break;
 
     // ── PUSHOFF_DETECTED: waiting for freefall (airborne) ──
     case 'PUSHOFF_DETECTED':
-      gTrace.push({t: Math.round(timeMs - traceStartTime), g: gForce, s: 'PD'});
       if (gForce < AIRBORNE_THRESHOLD) {
         state = 'AIRBORNE';
         airborneStartTime = timeMs;
         landingSustainStart = 0;
-        gTrace.push({t: Math.round(timeMs - traceStartTime), g: gForce, s: 'AIR'});
         setStatus('airborne', 'AIRBORNE!');
         airtimeValueEl.classList.add('airborne');
       }
       // False alarm: G returned to normal without freefall after 500ms
       if (timeMs - pushoffDetectedTime > 500 && gForce < PUSHOFF_THRESHOLD && gForce > AIRBORNE_THRESHOLD) {
         state = 'WAITING';
-        gTrace = [];
         setStatus('measuring', 'Ready — jump!');
       }
       break;
@@ -381,7 +355,6 @@ function handleMotion(event) {
     // ── AIRBORNE: in freefall, watching for landing ──
     case 'AIRBORNE':
       var elapsedAirborne = timeMs - airborneStartTime;
-      gTrace.push({t: Math.round(timeMs - traceStartTime), g: gForce, s: 'A'});
 
       // Live airtime display while in air
       airtimeValueEl.textContent = Math.round(elapsedAirborne);
@@ -411,14 +384,6 @@ function handleMotion(event) {
 // ─────────────────────────────────────────────────────────────
 function onJumpComplete(airtimeMs, wasTimeout) {
   airtimeMs = Math.round(airtimeMs);
-
-  // Save trace for debugging
-  gTrace.push({t: Math.round(performance.now() - traceStartTime), g: 0, s: 'LAND'});
-  var traceStr = gTrace.map(function(p) {
-    return p.t + 'ms:' + p.g.toFixed(2) + 'G(' + p.s + ')';
-  }).join(' | ');
-  sdkInfoEl.textContent = 'Trace: ' + traceStr;
-  try { localStorage.setItem('airtime-last-trace', traceStr); } catch(e) {}
 
   // Update display
   airtimeValueEl.textContent = airtimeMs;
@@ -534,8 +499,6 @@ loadSavedData();
 
 function attachSensor() {
   window.addEventListener('devicemotion', handleMotion);
-  sdkInfoEl.textContent = 'Sensor: active';
-  // Start calibrating immediately
   state = 'CALIBRATING';
   calibrationSamples = [];
   setStatus('calibrating', 'Calibrating...');
@@ -543,8 +506,6 @@ function attachSensor() {
 
 if (typeof DeviceMotionEvent !== 'undefined' &&
     typeof DeviceMotionEvent.requestPermission === 'function') {
-  // iOS needs a user gesture — auto-request on first touch
-  sdkInfoEl.textContent = 'Tap screen to enable sensor';
   document.addEventListener('click', function once() {
     DeviceMotionEvent.requestPermission().then(function(s) {
       if (s === 'granted') attachSensor();
@@ -556,7 +517,6 @@ if (typeof DeviceMotionEvent !== 'undefined' &&
   attachSensor();
 } else {
   setStatus('error', 'No accelerometer available');
-  sdkInfoEl.textContent = 'No sensor';
 }
 </script>
 </body>
