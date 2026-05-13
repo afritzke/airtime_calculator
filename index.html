@@ -262,9 +262,10 @@ var G_FORCE_GRAVITY = 9.81;       // m/s²
 
 // Thresholds (in G-force units)
 var PUSHOFF_THRESHOLD = 1.3;      // G above this = push-off detected
-var AIRBORNE_THRESHOLD = 0.4;     // G below this = airborne (freefall)
+var AIRBORNE_THRESHOLD = 0.3;     // G below this = airborne (freefall) — tighter to avoid squat false positives
 var LANDING_THRESHOLD = 0.7;      // G above this = potential landing
 var LANDING_SUSTAIN_MS = 30;      // ms the signal must stay above threshold to confirm landing
+var MIN_AIRTIME_MS = 50;          // ignore jumps shorter than this (squat/noise artifacts)
 
 // Safety: auto-reset if airborne for too long (probably sensor error)
 var MAX_AIRBORNE_MS = 3000;
@@ -394,6 +395,13 @@ function handleMotion(event) {
 // ─────────────────────────────────────────────────────────────
 function onJumpComplete(airtimeMs, wasTimeout) {
   airtimeMs = Math.round(airtimeMs);
+
+  // Discard very short "jumps" — likely squat dips or sensor noise
+  if (airtimeMs < MIN_AIRTIME_MS && !wasTimeout) {
+    state = 'WAITING';
+    setStatus('measuring', 'Ready — jump!');
+    return;
+  }
 
   // Update display
   airtimeValueEl.textContent = airtimeMs;
