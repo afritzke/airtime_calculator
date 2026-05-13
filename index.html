@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<!--
+  (c) Meta Platforms, Inc. and affiliates. Confidential and proprietary.
+
+  Airtime Calculator - Measures jump airtime using the accelerometer on
+  Meta smart glasses. Detects the push-off spike, freefall (airborne) phase,
+  and landing to compute precise airtime in milliseconds.
+
+  Uses standard W3C DeviceMotionEvent API for sensor access.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <title>Airtime Calculator</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0a0a0a;
+      color: #e0e0e0;
+      width: 550px;
+      height: 550px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 12px 16px;
+      overflow: hidden;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 420px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      height: 100%;
+    }
+
+    /* ── Title ── */
+    .title-bar {
+      text-align: center;
+      padding: 4px 0;
+    }
+    .title-bar h1 {
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      background: linear-gradient(135deg, #00d4ff, #7b2ff7);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .title-bar .subtitle {
+      font-size: 11px;
+      color: #666;
+      margin-top: 2px;
+    }
+
+    /* ── Status indicator ── */
+    .status-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 14px;
+      background: #1a1a1a;
+      border-radius: 10px;
+      border: 1px solid #2a2a2a;
+    }
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #444;
+      flex-shrink: 0;
+    }
+    .status-dot.ready { background: #888; }
+    .status-dot.calibrating { background: #ffab00; animation: pulse 1s infinite; }
+    .status-dot.measuring { background: #ffab00; animation: pulse 1s infinite; }
+    .status-dot.airborne { background: #00e676; animation: pulse 0.4s infinite; }
+    .status-dot.landed { background: #00d4ff; }
+    .status-dot.error { background: #ff1744; }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+    .status-text {
+      font-size: 13px;
+      color: #aaa;
+    }
+    .g-readout {
+      margin-left: auto;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      color: #666;
+    }
+
+    /* ── Airtime display ── */
+    .airtime-display {
+      text-align: center;
+      padding: 16px 16px;
+      background: radial-gradient(ellipse at center, #1a1a2e 0%, #0f0f1a 100%);
+      border-radius: 16px;
+      border: 1px solid #2a2a3a;
+    }
+    .airtime-label {
+      font-size: 12px;
+      color: #666;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      margin-bottom: 4px;
+    }
+    .airtime-value {
+      font-family: 'Courier New', monospace;
+      font-size: 56px;
+      font-weight: 700;
+      color: #333;
+      line-height: 1;
+      transition: color 0.3s;
+    }
+    .airtime-value.has-value {
+      color: #00d4ff;
+      text-shadow: 0 0 20px rgba(0, 212, 255, 0.3);
+    }
+    .airtime-value.airborne {
+      color: #00e676;
+      text-shadow: 0 0 20px rgba(0, 230, 118, 0.4);
+    }
+    .airtime-unit {
+      font-size: 14px;
+      color: #555;
+      margin-top: 4px;
+    }
+    .airtime-unit.has-value { color: #00d4ff; }
+
+    /* ── Toggle button ── */
+    .btn-toggle {
+      width: 100%;
+      padding: 14px;
+      font-size: 18px;
+      font-weight: 700;
+      border: none;
+      border-radius: 12px;
+      cursor: pointer;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      transition: all 0.2s;
+      outline: none;
+    }
+    .btn-toggle.start {
+      background: linear-gradient(135deg, #00d4ff, #7b2ff7);
+      color: #fff;
+    }
+    .btn-toggle.start:focus { box-shadow: 0 0 0 3px rgba(0, 212, 255, 0.4); }
+    .btn-toggle.stop {
+      background: #ff1744;
+      color: #fff;
+    }
+    .btn-toggle.stop:focus { box-shadow: 0 0 0 3px rgba(255, 23, 68, 0.4); }
+    .btn-toggle:disabled {
+      background: #333;
+      color: #666;
+      cursor: not-allowed;
+    }
+
+    /* ── Record banner ── */
+    .record-section {
+      padding: 10px 14px;
+      background: #1a1a1a;
+      border-radius: 10px;
+      border: 1px solid #2a2a2a;
+    }
+    .section-title {
+      font-size: 11px;
+      color: #666;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      margin-bottom: 4px;
+    }
+    .record-value {
+      font-family: 'Courier New', monospace;
+      font-size: 24px;
+      font-weight: 700;
+      color: #7b2ff7;
+    }
+    .record-value.empty { color: #333; }
+    .record-date {
+      font-size: 10px;
+      color: #555;
+      margin-top: 2px;
+    }
+
+    /* ── Jump history ── */
+    .history-section {
+      padding: 10px 14px;
+      background: #1a1a1a;
+      border-radius: 10px;
+      border: 1px solid #2a2a2a;
+      flex: 1;
+      overflow: hidden;
+    }
+    .history-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .history-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 5px 12px;
+      background: #222;
+      border-radius: 8px;
+    }
+    .history-item .jump-num {
+      font-size: 11px;
+      color: #555;
+      width: 24px;
+    }
+    .history-item .jump-time {
+      font-family: 'Courier New', monospace;
+      font-size: 16px;
+      font-weight: 600;
+      color: #00d4ff;
+    }
+    .history-item .jump-date {
+      font-size: 10px;
+      color: #555;
+    }
+    .history-empty {
+      font-size: 12px;
+      color: #444;
+      text-align: center;
+      padding: 8px;
+    }
+
+    /* ── Footer ── */
+    .sdk-info {
+      text-align: center;
+      font-size: 10px;
+      color: #333;
+      padding: 2px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+
+    <!-- Title -->
+    <div class="title-bar">
+      <h1>Airtime Calculator</h1>
+      <div class="subtitle">Measure your jump airtime</div>
+    </div>
+
+    <!-- Status -->
+    <div class="status-bar">
+      <span class="status-dot" id="statusDot"></span>
+      <span class="status-text" id="statusText">Ready</span>
+      <span class="g-readout" id="gReadout">—</span>
+    </div>
+
+    <!-- Airtime Display -->
+    <div class="airtime-display">
+      <div class="airtime-label">Airtime</div>
+      <div class="airtime-value" id="airtimeValue">—</div>
+      <div class="airtime-unit" id="airtimeUnit">ms</div>
+    </div>
+
+    <!-- Toggle Button -->
+    <button class="btn-toggle start" id="toggleBtn" autofocus>
+      Start Measuring
+    </button>
+
+    <!-- All-Time Record -->
+    <div class="record-section">
+      <div class="section-title">🏆 All-Time Record</div>
+      <div class="record-value empty" id="recordValue">—</div>
+      <div class="record-date" id="recordDate"></div>
+    </div>
+
+    <!-- Jump History -->
+    <div class="history-section">
+      <div class="section-title">Recent Jumps</div>
+      <div class="history-list" id="historyList">
+        <div class="history-empty">No jumps recorded yet</div>
+      </div>
+    </div>
+
+    <!-- Sensor Info -->
+    <div class="sdk-info" id="sdkInfo">Sensor: waiting...</div>
+  </div>
+
+<script>
+// ─────────────────────────────────────────────────────────────
+// Configuration
+// ─────────────────────────────────────────────────────────────
+var G_FORCE_GRAVITY = 9.81;       // m/s²
+
+// Thresholds (in G-force units)
+var PUSHOFF_THRESHOLD = 1.3;      // G above this = push-off detected
+var AIRBORNE_THRESHOLD = 0.4;     // G below this = airborne (freefall)
+var LANDING_THRESHOLD = 0.7;      // G above this = potential landing
+var LANDING_SUSTAIN_MS = 30;      // ms the signal must stay above threshold to confirm landing
+
+// Safety: auto-stop if airborne for too long (probably sensor error)
+var MAX_AIRBORNE_MS = 3000;
+
+// Calibration
+var CALIBRATION_SAMPLES = 50;     // ~0.5 second at typical 100Hz
+var HISTORY_MAX = 5;
+
+// ─────────────────────────────────────────────────────────────
+// State
+// ─────────────────────────────────────────────────────────────
+// State machine: IDLE | CALIBRATING | WAITING | PUSHOFF_DETECTED | AIRBORNE
+var state = 'IDLE';
+var measuring = false;
+
+var calibrationSamples = [];
+var baselineG = 1.0;
+
+var pushoffDetectedTime = 0;
+var airborneStartTime = 0;
+var landingSustainStart = 0;
+
+var jumpHistory = [];   // [{ms, date}] most recent first
+var allTimeRecord = null; // {ms, date}
+
+// ─────────────────────────────────────────────────────────────
+// DOM elements
+// ─────────────────────────────────────────────────────────────
+var statusDot = document.getElementById('statusDot');
+var statusTextEl = document.getElementById('statusText');
+var gReadout = document.getElementById('gReadout');
+var airtimeValueEl = document.getElementById('airtimeValue');
+var airtimeUnitEl = document.getElementById('airtimeUnit');
+var toggleBtn = document.getElementById('toggleBtn');
+var recordValueEl = document.getElementById('recordValue');
+var recordDateEl = document.getElementById('recordDate');
+var historyListEl = document.getElementById('historyList');
+var sdkInfoEl = document.getElementById('sdkInfo');
+
+// ─────────────────────────────────────────────────────────────
+// W3C DeviceMotionEvent Sensor Handler
+// ─────────────────────────────────────────────────────────────
+var sensorActive = false;
+
+function handleMotion(event) {
+  var a = event.accelerationIncludingGravity;
+  if (!a || a.x === null) return;
+
+  // Compute total G-force magnitude
+  var mag = Math.sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
+  var gForce = mag / G_FORCE_GRAVITY;
+  var timeMs = performance.now();
+
+  // Live G readout (always active when sensor is on)
+  gReadout.textContent = gForce.toFixed(2) + 'G';
+
+  if (!measuring) return;
+
+  // ── State machine ──
+  switch (state) {
+
+    // ── CALIBRATING: collect baseline samples ──
+    case 'CALIBRATING':
+      calibrationSamples.push(gForce);
+      var progress = Math.round((calibrationSamples.length / CALIBRATION_SAMPLES) * 100);
+      setStatus('calibrating', 'Calibrating... ' + progress + '%');
+
+      if (calibrationSamples.length >= CALIBRATION_SAMPLES) {
+        var sum = 0;
+        for (var i = 0; i < calibrationSamples.length; i++) {
+          sum += calibrationSamples[i];
+        }
+        baselineG = sum / calibrationSamples.length;
+        state = 'WAITING';
+        setStatus('measuring', 'Ready — jump!');
+      }
+      break;
+
+    // ── WAITING: looking for the push-off spike ──
+    case 'WAITING':
+      if (gForce > PUSHOFF_THRESHOLD) {
+        state = 'PUSHOFF_DETECTED';
+        pushoffDetectedTime = timeMs;
+        setStatus('measuring', 'Push-off detected...');
+      }
+      break;
+
+    // ── PUSHOFF_DETECTED: waiting for freefall (airborne) ──
+    case 'PUSHOFF_DETECTED':
+      if (gForce < AIRBORNE_THRESHOLD) {
+        state = 'AIRBORNE';
+        airborneStartTime = timeMs;
+        landingSustainStart = 0;
+        setStatus('airborne', 'AIRBORNE!');
+        airtimeValueEl.classList.add('airborne');
+      }
+      // False alarm: G returned to normal without freefall after 500ms
+      if (timeMs - pushoffDetectedTime > 500 && gForce < PUSHOFF_THRESHOLD && gForce > AIRBORNE_THRESHOLD) {
+        state = 'WAITING';
+        setStatus('measuring', 'Ready — jump!');
+      }
+      break;
+
+    // ── AIRBORNE: in freefall, watching for landing ──
+    case 'AIRBORNE':
+      var elapsedAirborne = timeMs - airborneStartTime;
+
+      // Live airtime display while in air
+      airtimeValueEl.textContent = Math.round(elapsedAirborne);
+
+      // Safety timeout
+      if (elapsedAirborne > MAX_AIRBORNE_MS) {
+        onJumpComplete(elapsedAirborne, true);
+        break;
+      }
+
+      if (gForce > LANDING_THRESHOLD) {
+        // Potential landing — need sustained signal to confirm
+        if (landingSustainStart === 0) {
+          landingSustainStart = timeMs;
+        } else if (timeMs - landingSustainStart >= LANDING_SUSTAIN_MS) {
+          // Confirmed landing — airtime is from airborne start to first threshold crossing
+          var airtimeMs = landingSustainStart - airborneStartTime;
+          onJumpComplete(airtimeMs, false);
+        }
+      } else {
+        // Still in freefall — reset sustain timer
+        landingSustainStart = 0;
+      }
+      break;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Jump Complete
+// ─────────────────────────────────────────────────────────────
+function onJumpComplete(airtimeMs, wasTimeout) {
+  airtimeMs = Math.round(airtimeMs);
+
+  // Update display
+  displayAirtime(airtimeMs);
+
+  if (wasTimeout) {
+    setStatus('error', 'Timeout — possible sensor issue');
+  } else {
+    setStatus('landed', 'Landed! ' + airtimeMs + 'ms airtime');
+  }
+
+  // Add to history
+  var now = new Date();
+  var entry = {
+    ms: airtimeMs,
+    date: now.toLocaleTimeString()
+  };
+
+  jumpHistory.unshift(entry);
+  if (jumpHistory.length > HISTORY_MAX) {
+    jumpHistory.pop();
+  }
+
+  // Check all-time record
+  if (!allTimeRecord || airtimeMs > allTimeRecord.ms) {
+    allTimeRecord = {
+      ms: airtimeMs,
+      date: now.toLocaleDateString() + ' ' + now.toLocaleTimeString()
+    };
+    updateRecord();
+  }
+
+  updateHistory();
+  saveData();
+
+  // Continue measuring — go back to WAITING for next jump
+  // (instead of stopping sensors entirely)
+  if (!wasTimeout) {
+    state = 'WAITING';
+    // Brief delay then show ready status
+    setTimeout(function() {
+      if (measuring && state === 'WAITING') {
+        setStatus('measuring', 'Ready — jump again!');
+      }
+    }, 1500);
+  } else {
+    resetState();
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// UI Updates
+// ─────────────────────────────────────────────────────────────
+function setStatus(type, text) {
+  statusDot.className = 'status-dot ' + type;
+  statusTextEl.textContent = text;
+}
+
+function displayAirtime(ms) {
+  airtimeValueEl.textContent = ms;
+  airtimeValueEl.classList.remove('airborne');
+  airtimeValueEl.classList.add('has-value');
+  airtimeUnitEl.classList.add('has-value');
+}
+
+function clearAirtimeDisplay() {
+  airtimeValueEl.textContent = '—';
+  airtimeValueEl.classList.remove('has-value', 'airborne');
+  airtimeUnitEl.classList.remove('has-value');
+}
+
+function updateRecord() {
+  if (!allTimeRecord) {
+    recordValueEl.textContent = '—';
+    recordValueEl.classList.add('empty');
+    recordDateEl.textContent = '';
+    return;
+  }
+  recordValueEl.textContent = allTimeRecord.ms + ' ms';
+  recordValueEl.classList.remove('empty');
+  recordDateEl.textContent = allTimeRecord.date;
+}
+
+function updateHistory() {
+  if (jumpHistory.length === 0) {
+    historyListEl.innerHTML = '<div class="history-empty">No jumps recorded yet</div>';
+    return;
+  }
+
+  var html = '';
+  for (var i = 0; i < jumpHistory.length; i++) {
+    var entry = jumpHistory[i];
+    html += '<div class="history-item">' +
+      '<span class="jump-num">#' + (i + 1) + '</span>' +
+      '<span class="jump-time">' + entry.ms + ' ms</span>' +
+      '<span class="jump-date">' + entry.date + '</span>' +
+      '</div>';
+  }
+  historyListEl.innerHTML = html;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Toggle Button & D-pad Support
+// ─────────────────────────────────────────────────────────────
+function toggle() {
+  if (!measuring) {
+    startMeasuring();
+  } else {
+    stopMeasuring();
+  }
+}
+
+toggleBtn.addEventListener('click', toggle);
+
+// D-pad: Enter key triggers the button
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Enter' || e.keyCode === 13) {
+    toggleBtn.click();
+  }
+});
+
+function startMeasuring() {
+  if (!sensorActive) {
+    initSensor();
+    return;
+  }
+
+  // Reset display
+  clearAirtimeDisplay();
+  gReadout.textContent = '—';
+
+  // Start calibration phase
+  calibrationSamples = [];
+  state = 'CALIBRATING';
+  measuring = true;
+
+  // Update button
+  toggleBtn.textContent = 'Stop';
+  toggleBtn.classList.remove('start');
+  toggleBtn.classList.add('stop');
+}
+
+function stopMeasuring() {
+  measuring = false;
+  setStatus('ready', 'Stopped — tap Start to measure');
+  resetState();
+}
+
+function resetState() {
+  state = 'IDLE';
+  measuring = false;
+  calibrationSamples = [];
+  pushoffDetectedTime = 0;
+  airborneStartTime = 0;
+  landingSustainStart = 0;
+  airtimeValueEl.classList.remove('airborne');
+
+  toggleBtn.textContent = 'Start Measuring';
+  toggleBtn.classList.remove('stop');
+  toggleBtn.classList.add('start');
+}
+
+// ─────────────────────────────────────────────────────────────
+// Sensor Initialization (W3C DeviceMotionEvent)
+// ─────────────────────────────────────────────────────────────
+function initSensor() {
+  if (typeof DeviceMotionEvent !== 'undefined' &&
+      typeof DeviceMotionEvent.requestPermission === 'function') {
+    // iOS / permission-gated browsers
+    DeviceMotionEvent.requestPermission().then(function(permState) {
+      if (permState === 'granted') {
+        attachSensor();
+      } else {
+        setStatus('error', 'Sensor permission denied');
+        sdkInfoEl.textContent = 'Permission denied';
+      }
+    }).catch(function() {
+      setStatus('error', 'Sensor permission error');
+      sdkInfoEl.textContent = 'Permission error';
+    });
+  } else if ('DeviceMotionEvent' in window) {
+    attachSensor();
+  } else {
+    setStatus('error', 'Accelerometer not available');
+    sdkInfoEl.textContent = 'No accelerometer';
+    toggleBtn.disabled = true;
+  }
+}
+
+function attachSensor() {
+  window.addEventListener('devicemotion', handleMotion);
+  sensorActive = true;
+  sdkInfoEl.textContent = 'Sensor: active (W3C DeviceMotion)';
+  setStatus('ready', 'Ready — tap Start and jump!');
+  // Now actually start measuring
+  startMeasuring();
+}
+
+// ─────────────────────────────────────────────────────────────
+// Persistence (localStorage)
+// ─────────────────────────────────────────────────────────────
+function loadSavedData() {
+  try {
+    var saved = localStorage.getItem('airtime-record');
+    if (saved) {
+      allTimeRecord = JSON.parse(saved);
+      updateRecord();
+    }
+    var savedHistory = localStorage.getItem('airtime-history');
+    if (savedHistory) {
+      jumpHistory = JSON.parse(savedHistory);
+      updateHistory();
+    }
+  } catch(e) { /* ignore parse errors */ }
+}
+
+function saveData() {
+  try {
+    if (allTimeRecord) {
+      localStorage.setItem('airtime-record', JSON.stringify(allTimeRecord));
+    }
+    localStorage.setItem('airtime-history', JSON.stringify(jumpHistory));
+  } catch(e) { /* ignore storage errors */ }
+}
+
+// Save on page unload
+window.addEventListener('beforeunload', saveData);
+
+// ─────────────────────────────────────────────────────────────
+// Init
+// ─────────────────────────────────────────────────────────────
+loadSavedData();
+
+// Auto-init sensor if no permission gate needed
+if ('DeviceMotionEvent' in window &&
+    typeof DeviceMotionEvent.requestPermission !== 'function') {
+  attachSensor();
+} else {
+  sdkInfoEl.textContent = 'Tap START to enable sensor';
+}
+</script>
+</body>
+</html>
