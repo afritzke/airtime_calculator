@@ -551,10 +551,42 @@ function toggle() {
 
 toggleBtn.addEventListener('click', toggle);
 
-// D-pad: Enter key triggers the button
+// D-pad / EMG input: arrow keys and Enter
+// HN glasses translate EMG gestures to keyboard events
 document.addEventListener('keydown', function(e) {
-  if (e.key === 'Enter' || e.keyCode === 13) {
-    toggleBtn.click();
+  var key = e.key || '';
+  var code = e.keyCode || 0;
+
+  // Enter, Space, or any "select" action → toggle
+  if (key === 'Enter' || code === 13 || key === ' ' || code === 32) {
+    e.preventDefault();
+    toggle();
+  }
+
+  // Arrow keys — consume them so the page doesn't scroll
+  if (key === 'ArrowUp' || key === 'ArrowDown' ||
+      key === 'ArrowLeft' || key === 'ArrowRight' ||
+      code >= 37 && code <= 40) {
+    e.preventDefault();
+  }
+});
+
+// Also listen for keyup and click anywhere on the page
+// in case the glasses browser fires different event types
+document.addEventListener('keyup', function(e) {
+  var key = e.key || '';
+  var code = e.keyCode || 0;
+  if (key === 'Enter' || code === 13) {
+    e.preventDefault();
+    toggle();
+  }
+});
+
+// Tap anywhere on the page to toggle (for touch/cursor modes)
+document.body.addEventListener('click', function(e) {
+  // Only if they didn't click the button itself (avoid double-fire)
+  if (e.target !== toggleBtn) {
+    toggle();
   }
 });
 
